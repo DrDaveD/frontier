@@ -50,6 +50,7 @@ struct s_FrontierMemData
   int binzipped;
   unsigned char zipbuf[4096];
   int zipbuflen;
+  void *zstate;
  };
 typedef struct s_FrontierMemData FrontierMemData;
 FrontierMemData *frontierMemData_create(int zipped,int secured,const char *params1,const char *params2);
@@ -137,7 +138,6 @@ struct s_Channel
   char *ttllong_suffix;
   char *ttlforever_suffix;
   int client_cache_maxsize;
-  void *zsave;
   void *serverrsakey[FRONTIER_MAX_SERVERN];
  };
 typedef struct s_Channel Channel;
