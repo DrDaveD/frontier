@@ -51,6 +51,9 @@ void *(*frontier_mem_alloc)(size_t size);
 void (*frontier_mem_free)(void *ptr);
 
 int frontier_pacparser_init(void);
+void frontier_init_lock();
+void frontier_init_unlock();
+void frontier_setThreadSafe();
 
 static int getNumNonBackupProxies(FrontierConfig *cfg)
  {
@@ -73,6 +76,8 @@ FrontierConfig *frontierConfig_get(const char *server_url,const char *proxy_url,
    }
   bzero(cfg,sizeof(FrontierConfig));
 
+
+  frontier_init_lock();
 
   // Set initial retrieve zip level first because it may be overridden
   //  by a complex server string next.
@@ -219,10 +224,13 @@ FrontierConfig *frontierConfig_get(const char *server_url,const char *proxy_url,
   frontier_log(FRONTIER_LOGLEVEL_DEBUG,__FILE__,__LINE__,"Client cache max result size is %d",cfg->client_cache_max_result_size);
   frontier_log(FRONTIER_LOGLEVEL_DEBUG,__FILE__,__LINE__,"Failover to server is %s",cfg->failover_to_server?"yes":"no");
 
+  frontier_init_unlock();
+
   return cfg;
 
 cleanup:
   frontierConfig_delete(cfg);
+  frontier_init_unlock();
   return 0;
  }
 
@@ -611,6 +619,8 @@ static int frontierConfig_parseComplexServerSpec(FrontierConfig *cfg,const char*
 	  frontierConfig_setCAPath(cfg,valp);
 	else if(strcmp(keyp,"clientcachemaxresultsize")==0)
 	  frontierConfig_setClientCacheMaxResultSize(cfg,atoi(valp));
+	else if((strcmp(keyp,"threadsafe")==0)&&(strcmp(valp,"yes")==0))
+	  frontier_setThreadSafe();
 	else
 	 {
 	 /* else ignore unrecognized keys */

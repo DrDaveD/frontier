@@ -137,6 +137,7 @@ struct s_Channel
   char *ttllong_suffix;
   char *ttlforever_suffix;
   int client_cache_maxsize;
+  void *zsave;
   void *serverrsakey[FRONTIER_MAX_SERVERN];
  };
 typedef struct s_Channel Channel;
@@ -154,7 +155,10 @@ struct s_RSBlob
  };
 typedef struct s_RSBlob RSBlob;
 
-
+void frontier_init_lock();
+void frontier_init_unlock();
+void frontier_lock();
+int frontier_unlock();
 
 char *frontier_str_now(char *);
 

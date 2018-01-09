@@ -12,6 +12,16 @@
  *  http://fermitools.fnal.gov/about/terms.html
  *
  */
+/*
+ * NOTEs on thread safety: 
+ * frontier_init(), frontier_initdebug(), and frontier_createChannel()
+ *   are always thread-safe.  The other functions might not be unless
+ *   the configuration option threadsafe=yes is set on any channel.  From
+ *   then on all functions should be safe.  Parallelism is limited
+ *   however, and is primarily only allowed while waiting for input.
+ * With multiple threads, frontier_getErrorMsg() is not reliable outside
+ *   of the client and may return a value from a different thread.
+ */
 
 #ifndef __HEADER_H_FRONTIER_H
 #define __HEADER_H_FRONTIER_H

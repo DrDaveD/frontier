@@ -28,6 +28,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <pthread.h>
 #include <pwd.h>
 #include <fcntl.h>
 #include <openssl/bio.h>
@@ -51,6 +52,36 @@ static void channel_delete(Channel *chn);
 
 static fn_client_cache_list *client_cache_list=0;
 
+// See comments in frontier.h about thread safety
+static pthread_mutex_t mutex_lock = PTHREAD_MUTEX_INITIALIZER;
+static int threadsafe = 0;
+
+void frontier_init_lock()
+ {
+  pthread_mutex_lock(&mutex_lock);
+ }
+
+void frontier_init_unlock()
+ {
+  pthread_mutex_unlock(&mutex_lock);
+ }
+
+void frontier_lock()
+ {
+  if(threadsafe) pthread_mutex_lock(&mutex_lock);
+ }
+
+int frontier_unlock()
+ {
+  if(threadsafe) return(pthread_mutex_unlock(&mutex_lock));
+  return 0;
+ }
+
+void frontier_setThreadSafe()
+ {
+  frontier_log(FRONTIER_LOGLEVEL_DEBUG,__FILE__,__LINE__,"set threadsafe");
+  threadsafe = 1;
+ }
 
 // our own implementation of strndup
 char *frontier_str_ncopy(const char *str, size_t len)
@@ -155,7 +186,12 @@ int frontier_init(void *(*f_mem_alloc)(size_t size),void (*f_mem_free)(void *ptr
 int frontier_initdebug(void *(*f_mem_alloc)(size_t size),void (*f_mem_free)(void *ptr),
 			const char *logfilename, const char *loglevel)
  {
-  if(initialized) return FRONTIER_OK;
+  frontier_init_lock();
+  if(initialized)
+   {
+    frontier_init_unlock();
+    return FRONTIER_OK;
+   }
 
   if(!f_mem_alloc) {f_mem_alloc=malloc; f_mem_free=free;}
   if(!f_mem_free) {f_mem_alloc=malloc; f_mem_free=free;}
@@ -203,6 +239,7 @@ int frontier_initdebug(void *(*f_mem_alloc)(size_t size),void (*f_mem_free)(void
   set_frontier_id();
 
   initialized=1;
+  frontier_init_unlock();
 
   return FRONTIER_OK;
  }
@@ -220,12 +257,14 @@ static Channel *channel_create2(FrontierConfig *config, int *ec)
   int n,s;
   int longfresh=0;
 
+  frontier_lock();
   chn=frontier_mem_alloc(sizeof(Channel));
   if(!chn) 
    {
     *ec=FRONTIER_EMEM;
     FRONTIER_MSG(*ec);
     if(config)frontierConfig_delete(config);
+    frontier_unlock();
     return (void*)0;
    }
   bzero(chn,sizeof(Channel));
@@ -238,6 +277,7 @@ static Channel *channel_create2(FrontierConfig *config, int *ec)
     *ec=FRONTIER_EMEM;
     FRONTIER_MSG(*ec);
     channel_delete(chn);    
+    frontier_unlock();
     return (void*)0;
    }
   if(!chn->cfg->server_num)
@@ -245,6 +285,7 @@ static Channel *channel_create2(FrontierConfig *config, int *ec)
     *ec=FRONTIER_ECFG;
     frontier_setErrorMsg(__FILE__,__LINE__,"no servers configured");
     channel_delete(chn);    
+    frontier_unlock();
     return (void*)0;
    }
   
@@ -252,6 +293,7 @@ static Channel *channel_create2(FrontierConfig *config, int *ec)
   if(!chn->ht_clnt||*ec)
    {
     channel_delete(chn);    
+    frontier_unlock();
     return (void*)0;
    }
    
@@ -265,6 +307,7 @@ static Channel *channel_create2(FrontierConfig *config, int *ec)
      {
       *ec=ret;
       channel_delete(chn);    
+      frontier_unlock();
       return (void*)0;
      }
     n++;
@@ -275,6 +318,7 @@ static Channel *channel_create2(FrontierConfig *config, int *ec)
     *ec=FRONTIER_ECFG;
     frontier_setErrorMsg(__FILE__,__LINE__,"no server configured");
     channel_delete(chn);    
+    frontier_unlock();
     return (void*)0;
    }
 
@@ -290,6 +334,7 @@ static Channel *channel_create2(FrontierConfig *config, int *ec)
      {
       *ec=ret;
       channel_delete(chn);    
+      frontier_unlock();
       return (void*)0;
      }
    }while(frontierConfig_nextProxy(chn->cfg)==0);
@@ -306,6 +351,7 @@ static Channel *channel_create2(FrontierConfig *config, int *ec)
       *ec=FRONTIER_EMEM;
       FRONTIER_MSG(*ec);
       channel_delete(chn);    
+      frontier_unlock();
       return (void*)0;
      }
 
@@ -337,6 +383,7 @@ static Channel *channel_create2(FrontierConfig *config, int *ec)
         FRONTIER_MSG(*ec);
         channel_delete(chn);    
 	frontier_mem_free(cache_listp);
+	frontier_unlock();
         return (void*)0;
        }
       cache_listp->table=fn_inithashtable();
@@ -346,6 +393,7 @@ static Channel *channel_create2(FrontierConfig *config, int *ec)
         FRONTIER_MSG(*ec);
         channel_delete(chn);    
 	frontier_mem_free(cache_listp);
+	frontier_unlock();
         return (void*)0;
        }
       // tack the servlet name on the end, space was allocated above
@@ -381,6 +429,7 @@ static Channel *channel_create2(FrontierConfig *config, int *ec)
     *ec=FRONTIER_EMEM;
     FRONTIER_MSG(*ec);
     channel_delete(chn);    
+    frontier_unlock();
     return (void*)0;
    }
   *chn->ttlshort_suffix='\0';
@@ -414,8 +463,13 @@ static Channel *channel_create2(FrontierConfig *config, int *ec)
   frontierHttpClnt_setWriteTimeoutSecs(chn->ht_clnt,
   		frontierConfig_getWriteTimeoutSecs(chn->cfg));
 
+  // initialize and save a gunzip stream for this thread
+  fn_gunzip_init();
+  chn->zsave=fn_zsave();
+
   chn->ttl=2; // default time-to-live is "long"
   *ec=FRONTIER_OK; 
+  frontier_unlock();
   return chn;
  }
 
@@ -443,8 +497,9 @@ static void channel_delete(Channel *chn)
   for(i=0;i<FRONTIER_MAX_SERVERN;i++)
     if(chn->serverrsakey[i])
       RSA_free((RSA *)chn->serverrsakey[i]);
-  frontier_mem_free(chn);
+  fn_zrestore(chn->zsave);
   fn_gzip_cleanup();
+  frontier_mem_free(chn);
   frontier_log_close();
  }
 
@@ -472,7 +527,9 @@ FrontierChannel frontier_createChannel2(FrontierConfig* config, int *ec) {
 
 void frontier_closeChannel(FrontierChannel fchn)
  {
+  frontier_lock();
   channel_delete((Channel*)fchn);
+  frontier_unlock();
  }
 
  
@@ -830,7 +887,11 @@ static int get_data(Channel *chn,const char *uri,const char *body,int curserver)
 
   while(1)
    {
+    // frontierHttpClnt_read() can allow other threads to come in, so
+    //   save & restore the unzip state around it.
+    chn->zsave=fn_zsave();
     ret=frontierHttpClnt_read(chn->ht_clnt,buf,8192);
+    fn_zrestore(chn->zsave);
     if(ret<0) goto end;
     if(ret==0) break;
 #if 0
@@ -930,6 +991,8 @@ int frontier_postRawData(FrontierChannel u_channel,const char *uri,const char *b
   pid_t pid;
   char nowbuf[26];
 
+  frontier_lock();
+  fn_zrestore(chn->zsave);
   if((pid=getpid())!=frontier_pid)
    {
      pid_t oldpid;
@@ -954,6 +1017,8 @@ int frontier_postRawData(FrontierChannel u_channel,const char *uri,const char *b
   if(!chn) 
    {
     frontier_setErrorMsg(__FILE__,__LINE__,"wrong channel");
+    chn->zsave=fn_zsave();
+    frontier_unlock();
     return FRONTIER_EIARG;
    }
   
@@ -963,8 +1028,11 @@ int frontier_postRawData(FrontierChannel u_channel,const char *uri,const char *b
      {
       frontier_log(FRONTIER_LOGLEVEL_DEBUG,__FILE__,__LINE__,"HIT in %s client cache, skipping contacting server",chn->client_cache->servlet);
       ret=prepare_channel(chn,-1,0,0);
-      if(ret) return ret;
-      return write_data(chn->resp,hashval->data,hashval->len);
+      if (!ret)
+        ret=write_data(chn->resp,hashval->data,hashval->len);
+      chn->zsave=fn_zsave();
+      frontier_unlock();
+      return ret;
      }
    }
   
@@ -994,6 +1062,7 @@ int frontier_postRawData(FrontierChannel u_channel,const char *uri,const char *b
       ret=get_data(chn,uri,body,curserver);    
       if(ret==FRONTIER_OK) 
        {
+        frontier_log(FRONTIER_LOGLEVEL_DEBUG,__FILE__,__LINE__,"finalizing response on chan %d at %s",chn->seqnum,frontier_str_now(nowbuf));
 	ret=frontierResponse_finalize(chn->resp);
 	frontier_turnErrorsIntoDebugs(0);
 	frontier_log(FRONTIER_LOGLEVEL_DEBUG,__FILE__,__LINE__,"chan %d response %d finished at %s",chn->seqnum,chn->resp->seqnum,frontier_str_now(nowbuf));
@@ -1162,6 +1231,8 @@ trydirectconnect:
    
   if(ret!=FRONTIER_OK) frontierHttpClnt_clear(clnt);
 
+  chn->zsave=fn_zsave();
+  frontier_unlock();
   return ret;
  }
 
