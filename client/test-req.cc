@@ -172,7 +172,7 @@ int do_main(int argc, char **argv)
    }
   opts.sql=sql;
 
-  pthread_t *threads;
+  pthread_t *threads=0;
   if (opts.num_threads>1)
     threads=new pthread_t[opts.num_threads-1];
   for(i=0; i<opts.num_threads-1; i++)
