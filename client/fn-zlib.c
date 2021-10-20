@@ -168,7 +168,7 @@ int fn_gunzip_init(void **inzstreamp)
     ret=inflateInit(inzstream);
     if(ret!=Z_OK)
      {
-      fn_gunzip_cleanup(&inzstream);
+      fn_gunzip_cleanup((void **)&inzstream);
       return ret;
      }
     *inzstreamp=inzstream;
