@@ -1,3 +1,6 @@
+  - Allow the c++ compiler to be overridden in the Makefile by setting
+    the CXX variable.  This was needed to compile for Ubuntu24 for LCG.
+
 v2_10_2 - 13 Jun 2023 (cvuosalo)
   - Update to be compatible with pacparser v1.4.2, which has a security
     fix that prevents injection of arbitrary code for execution. With some
